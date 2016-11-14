@@ -424,6 +424,7 @@
 				ds.dataBind();
 			```
 			*/
+			useFormatters: false,
 			schema: null,
 			/* type="string" the unique field identifier
 			```
@@ -5444,6 +5445,62 @@
 
 			return fields;
 		},
+		filterAllFields: function (val, fields) {
+			var f = this.settings.filtering, res,
+				origCallback = f.customFunc;
+			this.settings.filtering.customFunc = $.proxy(this._filterAllFields, this);
+			this.settings.filtering.customFiltering = {fields: fields};
+			s = this.filter(val);
+			this.settings.filtering.customFiltering = null;
+			this.settings.filtering.customFunc = origCallback;
+			return s;
+		},
+		_filterAllFields: function (val, data) {
+			var i, len = data.length, cs = this.settings.filtering.customFiltering || {},
+				filteredData = [], count = 0,
+				transformedData = [],
+				countTD = 0,
+				len = data.length,
+				vals = val.split(/\s+/),/*split by spaces */
+				fields = cs.fields || this.schema().fields();
+			if (!this.settings.filtering.caseSensitive) {
+				for (i = 0; i < vals.length; i++) {
+					vals[i] = vals[i].toLowerCase();
+				}
+			}
+			for (i = 0; i < len; i++) {
+				if (this._findMatchByFields(vals, data[i], fields, i)) {
+					filteredData[count++] = data[i];
+				}
+			}
+			return filteredData;
+		},
+		_findMatchByFields: function (vals, rec, fields, ind) {
+			var vl = vals.length, match = true, j , fl = fields.length, val, search,
+				ignoreCase = !this.settings.filtering.caseSensitive, fr = (this.schema()._formattedRecords || [])[ind];
+
+			for (i = 0; i < vl; i++) {
+				match = false;
+				search = vals[i];
+				for (j = 0; j < fl; j++) {
+					if (fields[j].format && fr && fr[fields[j].name + "_formatted"] !== undefined) {
+						val = fr[fields[j].name + "_formatted"];
+					} else {
+						val = this.getCellValue(fields[j].name, rec);
+					}
+					val = ignoreCase ? val.toString().toLowerCase() : val.toString();
+					if (val.toString().indexOf(search) !== -1) {
+						match = true;
+						break;
+					}
+				}
+				if (!match) {
+					break;
+				}
+				
+			}
+			return match;
+		},
 		/* this is used when sorting data
 		type can be "string", "number", "boolean", "date".
 		Other values are ignored and default conversion is used
@@ -7023,9 +7080,12 @@
 					/* type="string" The XPath expression to map the node to the field */
 					xpath: undefined,
 					/* type="string|function" This option is applicable only for fields with fieldDataType="object". Reference to a function (string or function) that can be used for complex data extraction from the data records, whose return value will be used for all data operations associated with this field. */
-					mapper: undefined
+					mapper: undefined,
+					/*paramType="string" optional="true" formatter*/
+					format: null
 				}
 			],
+			applyFormatters: false,
 			/* type="string" this is the property (path) in the data source where the records are located. */
 			searchField: null,
 			/* type="string" this is the property in the resulting object where actual resulting records will be put. (So the result will not be array but an object if this is defined), after the potential data source transformation */
@@ -7126,6 +7186,17 @@
 						results[ i ][ field.name ] = val;
 					}
 				}
+			}
+			if (this.schema.applyFormatters && field.format) {
+				this._formattedRecords = this._formattedRecords || [];
+				this._formattedRecords[ i ] = this._formattedRecords[ i ] || {};
+				this._formattedRecords[ i ][ field.name + "_formatted" ] =  $.ig.formatter(
+					results[ i ][ field.name ],
+					field.type,
+					field.format,
+					true
+					//,o.enableUTCDates
+				);
 			}
 		},
 		isEmpty: function (o) {
