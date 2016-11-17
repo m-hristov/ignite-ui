@@ -424,7 +424,6 @@
 				ds.dataBind();
 			```
 			*/
-			useFormatters: false,
 			schema: null,
 			/* type="string" the unique field identifier
 			```
@@ -4810,6 +4809,11 @@
 				} else {
 					ffields = f.expressions;
 				}
+				if (ffields.length && ffields[ 0 ] && ffields[ 0 ].filterAllFields) {
+					key = f.filterExprUrlKey ? f.filterExprUrlKey : "$filter";
+					params.filteringParams[ key ] = ffields[ 0 ].expr;
+					return;
+				}
 				for (i = 0; i < ffields.length; i++) {
 					// is a filtering request
 					this._isFilteringReq = true;
@@ -5445,51 +5449,59 @@
 
 			return fields;
 		},
-		filterAllFields: function (val, fields) {
-			var f = this.settings.filtering, res,
-				origCallback = f.customFunc;
-			this.settings.filtering.customFunc = $.proxy(this._filterAllFields, this);
-			this.settings.filtering.customFiltering = {fields: fields};
-			s = this.filter(val);
-			this.settings.filtering.customFiltering = null;
-			this.settings.filtering.customFunc = origCallback;
-			return s;
+		_splitFilterExpression: function (search) {
+			var matches = search.match(/\"[^\"]+\"/g) || [], res = [],
+				cs = this.settings.filtering.filterByAllFields || {};
+			if (cs.splitFilterExpression) {
+				return $.ig.util.invokeCallback(cs.splitFilterExpression, [search]);
+			}
+			for (i = 0; i < matches.length; i++) {
+				search = search.replace(matches[ i ], "");
+				res.push(matches[ i ].replace(/\"/g, ""));
+			}
+			matches = search.split(/\s+/);
+			res = res.concat(matches);
+			return res;
 		},
-		_filterAllFields: function (val, data) {
-			var i, len = data.length, cs = this.settings.filtering.customFiltering || {},
+		_filterAllFields: function (val, data, fields) {
+			fields = fields || this.schema().fields();
+			if (!fields || !fields.length) {
+				return [];
+			}
+			var dt = new Date().getTime();
+			var i, len = data.length,
 				filteredData = [], count = 0,
-				transformedData = [],
-				countTD = 0,
+				formattedRecords = (this.schema() || {})._formattedRecords || null,
 				len = data.length,
-				vals = val.split(/\s+/),/*split by spaces */
-				fields = cs.fields || this.schema().fields();
+				searchExprs = this._splitFilterExpression(val);/*split by spaces */
 			if (!this.settings.filtering.caseSensitive) {
-				for (i = 0; i < vals.length; i++) {
-					vals[i] = vals[i].toLowerCase();
+				for (i = 0; i < searchExprs.length; i++) {
+					searchExprs[i] = searchExprs[i].toLowerCase();
 				}
 			}
 			for (i = 0; i < len; i++) {
-				if (this._findMatchByFields(vals, data[i], fields, i)) {
+				if (this._findMatchByFields(searchExprs, data[i], fields, formattedRecords ? formattedRecords[ i ] : null)) {
 					filteredData[count++] = data[i];
 				}
 			}
+			console.log(new Date().getTime() - dt);
 			return filteredData;
 		},
-		_findMatchByFields: function (vals, rec, fields, ind) {
-			var vl = vals.length, match = true, j , fl = fields.length, val, search,
-				ignoreCase = !this.settings.filtering.caseSensitive, fr = (this.schema()._formattedRecords || [])[ind];
-
+		_findMatchByFields: function (vals, rec, fields, formattedRecord) {
+			var vl = vals.length, match = true, j , fl = fields.length, dataVal, search, fieldName,
+				ignoreCase = !this.settings.filtering.caseSensitive;
 			for (i = 0; i < vl; i++) {
 				match = false;
 				search = vals[i];
 				for (j = 0; j < fl; j++) {
-					if (fields[j].format && fr && fr[fields[j].name + "_formatted"] !== undefined) {
-						val = fr[fields[j].name + "_formatted"];
+					fieldName = fields[j].name;
+					if (formattedRecord && formattedRecord[fieldName + "_formatted"] !== undefined) {
+						dataVal = formattedRecord[fieldName + "_formatted"];
 					} else {
-						val = this.getCellValue(fields[j].name, rec);
+						dataVal = this._hasMapper ? this.getCellValue(fieldName, rec) : rec[ fieldName ];
 					}
-					val = ignoreCase ? val.toString().toLowerCase() : val.toString();
-					if (val.toString().indexOf(search) !== -1) {
+					dataVal = ignoreCase ? dataVal.toString().toLowerCase() : dataVal.toString();
+					if (dataVal.indexOf(search) !== -1) {
 						match = true;
 						break;
 					}
@@ -5497,7 +5509,6 @@
 				if (!match) {
 					break;
 				}
-				
 			}
 			return match;
 		},
@@ -5584,20 +5595,26 @@
 				/* A.T. 20 Dec. 2011 Fix for bug #96819 - igDataSource filtering feature
 				with own defined custom function does not filtering data */
 				this._dataView = [];
+			} else if (fieldExpressions && fieldExpressions.length &&
+						fieldExpressions[0] && fieldExpressions[0].filterAllFields) {
+				data = this._filterAllFields(fieldExpressions[0].expr, data,
+											fieldExpressions[0].fields || schema.fields());
+				this._filteredData = data;
+				this._dataView = [];
 			} else {
 				// re-initialize the dataView. We can do that safely, since data will either be cached, or will be stored in this.data(), meaning that will be the whole ds
 				this._dataView = [];
 				this._filteredData = [];
 				/* filter "data"
 				we will store all results in tmpData, and then assign it to the dataView. please ensure that */
+				if (expr) {
+					fieldExpressions = this._parseFilterExprString(expr);
+				}
+				if (allFieldsExpr) {
+					fieldExpressionsOnStrings = this._parseFilterExprString(allFieldsExpr);
+				}
 				for (i = 0; i < data.length; i++) {
 					skipRec = false;
-					if (expr) {
-						fieldExpressions = this._parseFilterExprString(expr);
-					}
-					if (allFieldsExpr) {
-						fieldExpressionsOnStrings = this._parseFilterExprString(allFieldsExpr);
-					}
 					for (j = 0; j < fieldExpressions.length; j++) {
 						/* if there is no match, break, we aren't going to add the record to the resulting data view.
 						the default boolean logic is to "AND" the fields */
@@ -7082,7 +7099,7 @@
 					/* type="string|function" This option is applicable only for fields with fieldDataType="object". Reference to a function (string or function) that can be used for complex data extraction from the data records, whose return value will be used for all data operations associated with this field. */
 					mapper: undefined,
 					/*paramType="string" optional="true" formatter*/
-					format: null
+					formatter: null
 				}
 			],
 			applyFormatters: false,
@@ -7195,7 +7212,6 @@
 					field.type,
 					field.format,
 					true
-					//,o.enableUTCDates
 				);
 			}
 		},
